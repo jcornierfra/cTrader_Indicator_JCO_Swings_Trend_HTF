@@ -3,6 +3,8 @@
 // =====================================================
 // Version: 1.4
 // Date: 2026-02-04
+// Author: Jerome Cornier
+// GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
 //
 // Description:
 // Detects swing highs and lows on a higher timeframe (HTF)
