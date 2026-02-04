@@ -1,5 +1,7 @@
 # JCO Swings Trend HTF Indicator
 
+![JCO Swings Trend HTF Screenshot](screenshot.png)
+
 A cTrader indicator for detecting swing highs and lows on a higher timeframe (HTF) with advanced trend analysis, CHoCH detection, and liquidity sweep detection.
 
 ## Features
