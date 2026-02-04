@@ -89,4 +89,4 @@ MIT License - Feel free to use and modify.
 
 ## Author
 
-JCO
+Jerome Cornier
