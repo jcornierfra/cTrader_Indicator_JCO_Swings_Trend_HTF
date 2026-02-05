@@ -73,10 +73,25 @@ CHoCH is an early warning signal of potential trend reversal:
 
 ## Liquidity Sweep Detection
 
-Detects institutional stop hunting when an intermediate swing (LL2, LL3, or LL4) sweeps below at least 2 other swing levels in a bullish trend (or above in a bearish trend).
+Detects institutional stop hunting patterns when price sweeps a swing level and reverses.
+
+### Bullish Trend (analyze lows)
+
+| Case | Condition | Description |
+|------|-----------|-------------|
+| 1 | LL2 < LL3 AND LL1 > LL2 AND HH1 > HH2 | LL2 swept below LL3 then price reversed |
+| 2 | LL1 < LL2 AND (Close > LL2 OR HH1 > HH2) | New low made but rejected (wick or highs confirm) |
+
+### Bearish Trend (analyze highs)
+
+| Case | Condition | Description |
+|------|-----------|-------------|
+| 1 | HH2 > HH3 AND HH1 < HH2 AND LL1 < LL2 | HH2 swept above HH3 then price reversed |
+| 2 | HH1 > HH2 AND (Close < HH2 OR LL1 < LL2) | New high made but rejected (wick or lows confirm) |
 
 ## Version History
 
+- **v1.5** (2026-02-05): New liquidity sweep detection logic (aligned with TradingView version)
 - **v1.4** (2026-02-04): Added Momentum/Compression status, simplified CHoCH, fixed swing confirmation
 - **v1.3** (2026-02-02): Added CHoCH detection
 - **v1.2** (2026-02-02): Added swing alternation, dynamic icon gap

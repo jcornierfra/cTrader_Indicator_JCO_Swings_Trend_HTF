@@ -1,8 +1,8 @@
 // =====================================================
 // JCO Swings Trend HTF Indicator
 // =====================================================
-// Version: 1.4
-// Date: 2026-02-04
+// Version: 1.5
+// Date: 2026-02-05
 // Author: Jerome Cornier
 // GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
 //
@@ -19,6 +19,12 @@
 // - Swing confirmation waits for closed candles on both sides
 //
 // Changelog:
+// v1.5 (2026-02-05)
+//   - New liquidity sweep detection logic (aligned with TradingView version)
+//     * Bullish: Case1 (LL2 swept LL3 + reversed) or Case2 (new low rejected)
+//     * Bearish: Case1 (HH2 swept HH3 + reversed) or Case2 (new high rejected)
+//   - Now requires only 3 swings instead of 5 for liquidity detection
+//
 // v1.4 (2026-02-04)
 //   - Added trend status: Momentum vs Compression
 //     * Momentum: LL1 > LL2 AND HH1 > HH2 (bullish) or inverse (bearish)
@@ -651,96 +657,89 @@ namespace cAlgo.Indicators
 
         private bool CalculateLiquiditySweep()
         {
-            // Need at least 5 of each for liquidity sweep calculation with deeper analysis
-            if (swingHighCount < 5 || swingLowCount < 5)
+            // Need at least 3 of each for liquidity sweep calculation
+            if (swingHighCount < 3 || swingLowCount < 3)
                 return false;
-            
+
             // ==============================================
-            // LIQUIDITY SWEEP DETECTION WITH 5 SWINGS
+            // LIQUIDITY SWEEP DETECTION
             // ==============================================
-            // A strong liquidity sweep occurs when an intermediate swing
-            // breaks below/above at least 2 other swing levels
-            // This indicates institutional stop hunting
-            
-            // BULLISH TREND with liquidity sweep:
-            // Check if LL2, LL3, or LL4 swept below at least 2 other lows
+            // Detects when price sweeps a swing level and reverses
+            // Notation: Low0/High0 = most recent (LL1/HH1), Low1/High1 = previous (LL2/HH2), etc.
+
+            // Get the close price of the HTF candle that formed LL1 and HH1
+            int ll1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingLowPrices[0].SwingHTFOpenTime);
+            int hh1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingHighPrices[0].SwingHTFOpenTime);
+            double ll1CandleClose = (ll1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[ll1HTFIndex] : 0;
+            double hh1CandleClose = (hh1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[hh1HTFIndex] : 0;
+
+            // Swing prices (using index notation: 0 = most recent)
+            double low0 = swingLowPrices[0].SwingPrice;   // LL1
+            double low1 = swingLowPrices[1].SwingPrice;   // LL2
+            double low2 = swingLowPrices[2].SwingPrice;   // LL3
+            double high0 = swingHighPrices[0].SwingPrice; // HH1
+            double high1 = swingHighPrices[1].SwingPrice; // HH2
+            double high2 = swingHighPrices[2].SwingPrice; // HH3
+
+            // BULLISH TREND with liquidity sweep (analyze lows):
             if (_swingsDirection == BULLISH)
             {
-                // Check LL2 (index 1) - did it sweep at least 2 others?
-                int ll2SweepCount = 0;
-                if (swingLowPrices[1].SwingPrice < swingLowPrices[2].SwingPrice) ll2SweepCount++; // Below LL3
-                if (swingLowPrices[1].SwingPrice < swingLowPrices[3].SwingPrice) ll2SweepCount++; // Below LL4
-                if (swingLowPrices[1].SwingPrice < swingLowPrices[4].SwingPrice) ll2SweepCount++; // Below LL5
-                
-                // Check LL3 (index 2) - did it sweep at least 2 others?
-                int ll3SweepCount = 0;
-                if (swingLowPrices[2].SwingPrice < swingLowPrices[3].SwingPrice) ll3SweepCount++; // Below LL4
-                if (swingLowPrices[2].SwingPrice < swingLowPrices[4].SwingPrice) ll3SweepCount++; // Below LL5
-                if (swingLowPrices[2].SwingPrice < swingLowPrices[1].SwingPrice) ll3SweepCount++; // Below LL2
-                
-                // Check LL4 (index 3) - did it sweep at least 2 others?
-                int ll4SweepCount = 0;
-                if (swingLowPrices[3].SwingPrice < swingLowPrices[4].SwingPrice) ll4SweepCount++; // Below LL5
-                if (swingLowPrices[3].SwingPrice < swingLowPrices[2].SwingPrice) ll4SweepCount++; // Below LL3
-                if (swingLowPrices[3].SwingPrice < swingLowPrices[1].SwingPrice) ll4SweepCount++; // Below LL2
-                
+                // Case 1: Low1 < Low2 AND Low0 > Low1 AND High0 > High1
+                // → LL2 swept below LL3 and price reversed (LL1 > LL2, HH1 > HH2)
+                bool case1 = (low1 < low2) && (low0 > low1) && (high0 > high1);
+
+                // Case 2: Low0 < Low1 AND (Close0 > Low1 OR High0 > High1)
+                // → New low made (LL1 < LL2) but rejected (closed above or highs confirm)
+                bool case2 = (low0 < low1) && (ll1CandleClose > low1 || high0 > high1);
+
                 if (EnablePrintSwings)
                 {
                     Print($"=== LIQUIDITY SWEEP ANALYSIS (BULLISH) ===");
-                    Print($"LL5={swingLowPrices[4].SwingPrice:F5}, LL4={swingLowPrices[3].SwingPrice:F5}, LL3={swingLowPrices[2].SwingPrice:F5}, LL2={swingLowPrices[1].SwingPrice:F5}, LL1={swingLowPrices[0].SwingPrice:F5}");
-                    Print($"LL2 sweep count: {ll2SweepCount}, LL3 sweep count: {ll3SweepCount}, LL4 sweep count: {ll4SweepCount}");
+                    Print($"LL3={low2:F5}, LL2={low1:F5}, LL1={low0:F5}, LL1 Close={ll1CandleClose:F5}");
+                    Print($"HH2={high1:F5}, HH1={high0:F5}");
+                    Print($"Case1 (LL2 swept LL3 + reversed): {case1}");
+                    Print($"Case2 (New low rejected): {case2}");
                 }
-                
-                // If any intermediate swing swept at least 2 levels, it's a liquidity sweep
-                if (ll2SweepCount >= 2 || ll3SweepCount >= 2 || ll4SweepCount >= 2)
+
+                if (case1 || case2)
                 {
                     if (EnablePrintSwings)
-                        Print("=> Liquidity Sweep DETECTED: Bullish trend with strong sweep pattern");
+                        Print($"=> Liquidity Sweep DETECTED (Bullish): {(case1 ? "Case1 - LL2 swept and reversed" : "Case2 - New low rejected")}");
                     return true;
                 }
             }
-            
-            // BEARISH TREND with liquidity sweep:
-            // Check if HH2, HH3, or HH4 swept above at least 2 other highs
+
+            // BEARISH TREND with liquidity sweep (analyze highs):
             if (_swingsDirection == BEARISH)
             {
-                // Check HH2 (index 1) - did it sweep at least 2 others?
-                int hh2SweepCount = 0;
-                if (swingHighPrices[1].SwingPrice > swingHighPrices[2].SwingPrice) hh2SweepCount++; // Above HH3
-                if (swingHighPrices[1].SwingPrice > swingHighPrices[3].SwingPrice) hh2SweepCount++; // Above HH4
-                if (swingHighPrices[1].SwingPrice > swingHighPrices[4].SwingPrice) hh2SweepCount++; // Above HH5
-                
-                // Check HH3 (index 2) - did it sweep at least 2 others?
-                int hh3SweepCount = 0;
-                if (swingHighPrices[2].SwingPrice > swingHighPrices[3].SwingPrice) hh3SweepCount++; // Above HH4
-                if (swingHighPrices[2].SwingPrice > swingHighPrices[4].SwingPrice) hh3SweepCount++; // Above HH5
-                if (swingHighPrices[2].SwingPrice > swingHighPrices[1].SwingPrice) hh3SweepCount++; // Above HH2
-                
-                // Check HH4 (index 3) - did it sweep at least 2 others?
-                int hh4SweepCount = 0;
-                if (swingHighPrices[3].SwingPrice > swingHighPrices[4].SwingPrice) hh4SweepCount++; // Above HH5
-                if (swingHighPrices[3].SwingPrice > swingHighPrices[2].SwingPrice) hh4SweepCount++; // Above HH3
-                if (swingHighPrices[3].SwingPrice > swingHighPrices[1].SwingPrice) hh4SweepCount++; // Above HH2
-                
+                // Case 1: High1 > High2 AND High0 < High1 AND Low0 < Low1
+                // → HH2 swept above HH3 and price reversed (HH1 < HH2, LL1 < LL2)
+                bool case1 = (high1 > high2) && (high0 < high1) && (low0 < low1);
+
+                // Case 2: High0 > High1 AND (Close0 < High1 OR Low0 < Low1)
+                // → New high made (HH1 > HH2) but rejected (closed below or lows confirm)
+                bool case2 = (high0 > high1) && (hh1CandleClose < high1 || low0 < low1);
+
                 if (EnablePrintSwings)
                 {
                     Print($"=== LIQUIDITY SWEEP ANALYSIS (BEARISH) ===");
-                    Print($"HH5={swingHighPrices[4].SwingPrice:F5}, HH4={swingHighPrices[3].SwingPrice:F5}, HH3={swingHighPrices[2].SwingPrice:F5}, HH2={swingHighPrices[1].SwingPrice:F5}, HH1={swingHighPrices[0].SwingPrice:F5}");
-                    Print($"HH2 sweep count: {hh2SweepCount}, HH3 sweep count: {hh3SweepCount}, HH4 sweep count: {hh4SweepCount}");
+                    Print($"HH3={high2:F5}, HH2={high1:F5}, HH1={high0:F5}, HH1 Close={hh1CandleClose:F5}");
+                    Print($"LL2={low1:F5}, LL1={low0:F5}");
+                    Print($"Case1 (HH2 swept HH3 + reversed): {case1}");
+                    Print($"Case2 (New high rejected): {case2}");
                 }
-                
-                // If any intermediate swing swept at least 2 levels, it's a liquidity sweep
-                if (hh2SweepCount >= 2 || hh3SweepCount >= 2 || hh4SweepCount >= 2)
+
+                if (case1 || case2)
                 {
                     if (EnablePrintSwings)
-                        Print("=> Liquidity Sweep DETECTED: Bearish trend with strong sweep pattern");
+                        Print($"=> Liquidity Sweep DETECTED (Bearish): {(case1 ? "Case1 - HH2 swept and reversed" : "Case2 - New high rejected")}");
                     return true;
                 }
             }
-            
+
             // If no liquidity sweep pattern found, return false
             if (EnablePrintSwings)
-                Print("=> No significant liquidity sweep detected");
+                Print("=> No liquidity sweep detected");
             return false;
         }
 
