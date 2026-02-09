@@ -1,8 +1,8 @@
 // =====================================================
 // JCO Swings Trend HTF Indicator
 // =====================================================
-// Version: 1.5
-// Date: 2026-02-05
+// Version: 1.6
+// Date: 2026-02-09
 // Author: Jerome Cornier
 // GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
 //
@@ -15,10 +15,19 @@
 // - Trend detection: BULLISH (HL) / BEARISH (LH) / UNCLEAR
 // - Trend status: Momentum (perfect trend) / Compression (slowdown)
 // - CHoCH detection: First sign of potential reversal (alert only)
-// - Liquidity sweep detection using 5 swings
+// - Gate trend change: requires CHoCH confirmation for reversals
+// - Liquidity sweep detection
 // - Swing confirmation waits for closed candles on both sides
 //
 // Changelog:
+// v1.6 (2026-02-09)
+//   - Added Gate Trend Change (aligned with TradingView v1.2)
+//     * Trend reversal requires CHoCH confirmation
+//     * Without CHoCH: maintains previous trend as Compression if structure supports it
+//     * Without CHoCH + no structure support: Unclear
+//   - CHoCH now uses previous trend direction (calculated from swings 1,2,3)
+//   - CalculateSwingsTrend refactored with offset parameter for reuse
+//
 // v1.5 (2026-02-05)
 //   - New liquidity sweep detection logic (aligned with TradingView version)
 //     * Bullish: Case1 (LL2 swept LL3 + reversed) or Case2 (new low rejected)
@@ -187,14 +196,21 @@ namespace cAlgo.Indicators
 
             if (swingDetected)
             {
-                // Calculate the trend based on the last 3 highs and 3 lows
-                _swingsDirection = CalculateSwingsTrend();
+                // 1. Calculate previous trend from swings 1,2,3
+                int prevDir = CalculateSwingsTrend(1, out int prevStatus);
+                bool hasPrevTrend = (swingHighCount >= 4 && swingLowCount >= 4);
 
-                // Search for liquidity sweep based on the direction
+                // 2. Calculate raw trend from swings 0,1,2
+                int rawDir = CalculateSwingsTrend(0, out int rawStatus);
+
+                // 3. Check for CHoCH (Change of Character) using previous trend direction
+                _chochStatus = CalculateCHoCH(prevDir, hasPrevTrend);
+
+                // 4. Gate trend change: require CHoCH confirmation for reversals
+                GateTrendChange(rawDir, rawStatus, prevDir, _chochStatus);
+
+                // 5. Search for liquidity sweep based on the gated direction
                 _liquiditySweep = CalculateLiquiditySweep();
-
-                // Check for CHoCH (Change of Character)
-                _chochStatus = CalculateCHoCH(); 
                 
                 // Draw the swings
                 if(DrawSwingIcons || DrawSwingDots)
@@ -537,121 +553,74 @@ namespace cAlgo.Indicators
             }
         }
         
-        private int CalculateSwingsTrend()
+        private int CalculateSwingsTrend(int offset, out int status)
         {
-            // Need at least 3 of each for trend calculation
-            if (swingHighCount < 3 || swingLowCount < 3)
+            // Need at least 3 + offset of each for trend calculation
+            if (swingHighCount < 3 + offset || swingLowCount < 3 + offset)
+            {
+                status = 0;
                 return NODIRECTION;
-            
+            }
+
+            double sh0 = swingHighPrices[0 + offset].SwingPrice;
+            double sh1 = swingHighPrices[1 + offset].SwingPrice;
+            double sh2 = swingHighPrices[2 + offset].SwingPrice;
+            double sl0 = swingLowPrices[0 + offset].SwingPrice;
+            double sl1 = swingLowPrices[1 + offset].SwingPrice;
+            double sl2 = swingLowPrices[2 + offset].SwingPrice;
+
             // ==============================================
             // TWO-LEVEL LOGIC: Primary + Secondary Confirmation
             // ==============================================
-            
-            // PRIMARY ANALYSIS - BULLISH structure based on LOWS
-            // Perfect case: LL3 < LL2 < LL1
-            bool perfectBullish = (swingLowPrices[2].SwingPrice < swingLowPrices[1].SwingPrice) 
-                                  && (swingLowPrices[1].SwingPrice < swingLowPrices[0].SwingPrice);
-            
-            // Sweep case: LL3 > LL2 (sweep) but LL1 > LL3 (recovery above)
-            bool sweepBullish = (swingLowPrices[2].SwingPrice > swingLowPrices[1].SwingPrice) // LL2 swept below LL3
-                                && (swingLowPrices[0].SwingPrice > swingLowPrices[2].SwingPrice); // But LL1 recovered above LL3
-            
-            // Additional check: LL1 should be higher than LL2 for any bullish scenario
-            bool ll1HigherThanLL2 = swingLowPrices[0].SwingPrice > swingLowPrices[1].SwingPrice;
-            
-            bool primaryBullish = (perfectBullish || sweepBullish) && ll1HigherThanLL2;
-            
-            // Ambiguous case for bullish: LL3 > LL2 < LL1 (V-shape correction)
-            bool ambiguousBullish = (swingLowPrices[2].SwingPrice > swingLowPrices[1].SwingPrice)
-                                    && (swingLowPrices[1].SwingPrice < swingLowPrices[0].SwingPrice);
-            
-            // PRIMARY ANALYSIS - BEARISH structure based on HIGHS
-            // Perfect case: HH3 > HH2 > HH1
-            bool perfectBearish = (swingHighPrices[2].SwingPrice > swingHighPrices[1].SwingPrice) 
-                                  && (swingHighPrices[1].SwingPrice > swingHighPrices[0].SwingPrice);
-            
-            // Sweep case: HH3 < HH2 (sweep) but HH1 < HH3 (breakdown below)
-            bool sweepBearish = (swingHighPrices[2].SwingPrice < swingHighPrices[1].SwingPrice) // HH2 swept above HH3
-                                && (swingHighPrices[0].SwingPrice < swingHighPrices[2].SwingPrice); // But HH1 broke below HH3
-            
-            // Additional check: HH1 should be lower than HH2 for any bearish scenario
-            bool hh1LowerThanHH2 = swingHighPrices[0].SwingPrice < swingHighPrices[1].SwingPrice;
-            
-            bool primaryBearish = (perfectBearish || sweepBearish) && hh1LowerThanHH2;
-            
-            // Ambiguous case for bearish: HH3 < HH2 > HH1 (^-shape correction)
-            bool ambiguousBearish = (swingHighPrices[2].SwingPrice < swingHighPrices[1].SwingPrice)
-                                    && (swingHighPrices[1].SwingPrice > swingHighPrices[0].SwingPrice);
-            
-            // SECONDARY CONFIRMATION using opposite swings
-            // For ambiguous bullish structure, check if highs confirm buyers' pressure
-            bool highsConfirmBullish = swingHighPrices[0].SwingPrice > swingHighPrices[1].SwingPrice; // HH1 > HH2
-            
-            // For ambiguous bearish structure, check if lows confirm sellers' pressure
-            bool lowsConfirmBearish = swingLowPrices[0].SwingPrice < swingLowPrices[1].SwingPrice; // LL1 < LL2
-            
-            if (EnablePrintSwings)
-            {
-                Print($"=== TREND ANALYSIS (3 Swings with Secondary Confirmation) ===");
-                Print($"Highs: HH3={swingHighPrices[2].SwingPrice:F5} -> HH2={swingHighPrices[1].SwingPrice:F5} -> HH1={swingHighPrices[0].SwingPrice:F5}");
-                Print($"Lows:  LL3={swingLowPrices[2].SwingPrice:F5} -> LL2={swingLowPrices[1].SwingPrice:F5} -> LL1={swingLowPrices[0].SwingPrice:F5}");
-                Print($"PRIMARY - Perfect Bullish: {perfectBullish}, Sweep Bullish: {sweepBullish}, LL1>LL2: {ll1HigherThanLL2}");
-                Print($"PRIMARY - Perfect Bearish: {perfectBearish}, Sweep Bearish: {sweepBearish}, HH1<HH2: {hh1LowerThanHH2}");
-                Print($"AMBIGUOUS - Bullish V-shape: {ambiguousBullish}, Bearish ^-shape: {ambiguousBearish}");
-                Print($"SECONDARY - Highs confirm bullish: {highsConfirmBullish}, Lows confirm bearish: {lowsConfirmBearish}");
-            }
-            
-            // DECISION LOGIC
 
-            // Clear BULLISH (primary structure confirmed)
+            // PRIMARY ANALYSIS - BULLISH structure based on LOWS
+            bool perfectBullish = (sl2 < sl1) && (sl1 < sl0);
+            bool sweepBullish = (sl2 > sl1) && (sl0 > sl2);
+            bool ll1HigherThanLL2 = sl0 > sl1;
+            bool primaryBullish = (perfectBullish || sweepBullish) && ll1HigherThanLL2;
+            bool ambiguousBullish = (sl2 > sl1) && (sl1 < sl0);
+
+            // PRIMARY ANALYSIS - BEARISH structure based on HIGHS
+            bool perfectBearish = (sh2 > sh1) && (sh1 > sh0);
+            bool sweepBearish = (sh2 < sh1) && (sh0 < sh2);
+            bool hh1LowerThanHH2 = sh0 < sh1;
+            bool primaryBearish = (perfectBearish || sweepBearish) && hh1LowerThanHH2;
+            bool ambiguousBearish = (sh2 < sh1) && (sh1 > sh0);
+
+            // SECONDARY CONFIRMATION using opposite swings
+            bool highsConfirmBullish = sh0 > sh1;
+            bool lowsConfirmBearish = sl0 < sl1;
+
+            if (EnablePrintSwings && offset == 0)
+            {
+                Print($"=== TREND ANALYSIS (offset={offset}) ===");
+                Print($"Highs: HH3={sh2:F5} -> HH2={sh1:F5} -> HH1={sh0:F5}");
+                Print($"Lows:  LL3={sl2:F5} -> LL2={sl1:F5} -> LL1={sl0:F5}");
+            }
+
+            // DECISION LOGIC
             if (primaryBullish)
             {
-                // Bullish Momentum: LL1 > LL2 AND HH1 > HH2 (perfect trend)
-                // Bullish Compression: LL1 > LL2 BUT HH1 < HH2 (highs are blocked)
-                _trendStatus = highsConfirmBullish ? MOMENTUM : COMPRESSION;
-
-                if (EnablePrintSwings)
-                    Print($"=> Trend: BULLISH {(_trendStatus == MOMENTUM ? "MOMENTUM" : "COMPRESSION")} (Primary HL structure confirmed)");
+                status = highsConfirmBullish ? MOMENTUM : COMPRESSION;
                 return BULLISH;
             }
-
-            // Clear BEARISH (primary structure confirmed)
             if (primaryBearish)
             {
-                // Bearish Momentum: HH1 < HH2 AND LL1 < LL2 (perfect trend)
-                // Bearish Compression: HH1 < HH2 BUT LL1 > LL2 (lows are blocked)
-                _trendStatus = lowsConfirmBearish ? MOMENTUM : COMPRESSION;
-
-                if (EnablePrintSwings)
-                    Print($"=> Trend: BEARISH {(_trendStatus == MOMENTUM ? "MOMENTUM" : "COMPRESSION")} (Primary LH structure confirmed)");
+                status = lowsConfirmBearish ? MOMENTUM : COMPRESSION;
                 return BEARISH;
             }
-
-            // Ambiguous BULLISH but highs confirm
             if (ambiguousBullish && highsConfirmBullish)
             {
-                _trendStatus = MOMENTUM; // Highs confirm, so momentum
-
-                if (EnablePrintSwings)
-                    Print("=> Trend: BULLISH MOMENTUM (Ambiguous lows but highs confirm buyer pressure)");
+                status = MOMENTUM;
                 return BULLISH;
             }
-
-            // Ambiguous BEARISH but lows confirm
             if (ambiguousBearish && lowsConfirmBearish)
             {
-                _trendStatus = MOMENTUM; // Lows confirm, so momentum
-
-                if (EnablePrintSwings)
-                    Print("=> Trend: BEARISH MOMENTUM (Ambiguous highs but lows confirm seller pressure)");
+                status = MOMENTUM;
                 return BEARISH;
             }
 
-            // Otherwise: Structure is unclear
-            _trendStatus = 0; // No status for unclear trend
-
-            if (EnablePrintSwings)
-                Print("=> Trend: UNCLEAR (No clear structure or confirmation)");
+            status = 0;
             return NODIRECTION;
         }
 
@@ -743,15 +712,11 @@ namespace cAlgo.Indicators
             return false;
         }
 
-        private int CalculateCHoCH()
+        private int CalculateCHoCH(int prevDir, bool hasPrevTrend)
         {
-            // Need at least 4 highs and 4 lows for CHoCH detection
-            if (swingHighCount < 4 || swingLowCount < 4)
+            // Need at least 3 highs and 3 lows for CHoCH detection
+            if (swingHighCount < 3 || swingLowCount < 3)
                 return CONTINUATION;
-
-            // Reference levels (older swings)
-            double maxOlderHighs = Math.Max(swingHighPrices[2].SwingPrice, swingHighPrices[3].SwingPrice);
-            double minOlderLows = Math.Min(swingLowPrices[2].SwingPrice, swingLowPrices[3].SwingPrice);
 
             // Get the close price of the HTF candle that formed HH1 and LL1
             int hh1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingHighPrices[0].SwingHTFOpenTime);
@@ -763,43 +728,43 @@ namespace cAlgo.Indicators
             if (EnablePrintSwings)
             {
                 Print($"=== CHoCH ANALYSIS ===");
-                Print($"HH4={swingHighPrices[3].SwingPrice:F5}, HH3={swingHighPrices[2].SwingPrice:F5}, HH2={swingHighPrices[1].SwingPrice:F5}, HH1={swingHighPrices[0].SwingPrice:F5}");
-                Print($"LL4={swingLowPrices[3].SwingPrice:F5}, LL3={swingLowPrices[2].SwingPrice:F5}, LL2={swingLowPrices[1].SwingPrice:F5}, LL1={swingLowPrices[0].SwingPrice:F5}");
-                Print($"Max older highs (HH3,HH4)={maxOlderHighs:F5}, Min older lows (LL3,LL4)={minOlderLows:F5}");
+                Print($"HH3={swingHighPrices[2].SwingPrice:F5}, HH2={swingHighPrices[1].SwingPrice:F5}, HH1={swingHighPrices[0].SwingPrice:F5}");
+                Print($"LL3={swingLowPrices[2].SwingPrice:F5}, LL2={swingLowPrices[1].SwingPrice:F5}, LL1={swingLowPrices[0].SwingPrice:F5}");
+                Print($"PrevDir={prevDir}, HasPrevTrend={hasPrevTrend}");
                 Print($"HH1 candle close={hh1CandleClose:F5}, LL1 candle close={ll1CandleClose:F5}");
             }
 
             // ============================================
-            // CHoCH BULLISH: Requires previous bearish structure (LH) then a break
-            // - Previous structure must be bearish: HH2 < HH3 (lower highs)
-            // - Then HH1 > HH2 (breaks the lower high pattern)
-            // - The candle that formed HH1 must have closed above HH2
+            // CHoCH BULLISH: previous trend was NOT bullish + higher high with close confirmation
+            // When hasPrevTrend, use prevDir. Otherwise fall back to direct structure check (HH2 < HH3)
             // ============================================
-            bool previousBearishStructure = swingHighPrices[1].SwingPrice < swingHighPrices[2].SwingPrice; // HH2 < HH3
             bool hh1AboveHH2 = swingHighPrices[0].SwingPrice > swingHighPrices[1].SwingPrice;
             bool hh1CandleClosedAboveHH2 = hh1CandleClose > swingHighPrices[1].SwingPrice;
+            bool prevNotBullish = hasPrevTrend
+                ? (prevDir != BULLISH)
+                : (swingHighPrices[1].SwingPrice < swingHighPrices[2].SwingPrice); // HH2 < HH3
 
-            if (previousBearishStructure && hh1AboveHH2 && hh1CandleClosedAboveHH2)
+            if (prevNotBullish && hh1AboveHH2 && hh1CandleClosedAboveHH2)
             {
                 if (EnablePrintSwings)
-                    Print($"=> CHoCH BULLISH: HH2 < HH3 (bearish structure), then HH1 > HH2, candle closed above HH2");
+                    Print($"=> CHoCH BULLISH: prevDir={prevDir}, HH1 > HH2, candle closed above HH2");
                 return CHOCH_BULLISH;
             }
 
             // ============================================
-            // CHoCH BEARISH: Requires previous bullish structure (HL) then a break
-            // - Previous structure must be bullish: LL2 > LL3 (higher lows)
-            // - Then LL1 < LL2 (breaks the higher low pattern)
-            // - The candle that formed LL1 must have closed below LL2
+            // CHoCH BEARISH: previous trend was NOT bearish + lower low with close confirmation
+            // When hasPrevTrend, use prevDir. Otherwise fall back to direct structure check (LL2 > LL3)
             // ============================================
-            bool previousBullishStructure = swingLowPrices[1].SwingPrice > swingLowPrices[2].SwingPrice; // LL2 > LL3
             bool ll1BelowLL2 = swingLowPrices[0].SwingPrice < swingLowPrices[1].SwingPrice;
             bool ll1CandleClosedBelowLL2 = ll1CandleClose < swingLowPrices[1].SwingPrice;
+            bool prevNotBearish = hasPrevTrend
+                ? (prevDir != BEARISH)
+                : (swingLowPrices[1].SwingPrice > swingLowPrices[2].SwingPrice); // LL2 > LL3
 
-            if (previousBullishStructure && ll1BelowLL2 && ll1CandleClosedBelowLL2)
+            if (prevNotBearish && ll1BelowLL2 && ll1CandleClosedBelowLL2)
             {
                 if (EnablePrintSwings)
-                    Print($"=> CHoCH BEARISH: LL2 > LL3 (bullish structure), then LL1 < LL2, candle closed below LL2");
+                    Print($"=> CHoCH BEARISH: prevDir={prevDir}, LL1 < LL2, candle closed below LL2");
                 return CHOCH_BEARISH;
             }
 
@@ -807,6 +772,74 @@ namespace cAlgo.Indicators
             if (EnablePrintSwings)
                 Print("=> CONTINUATION (No CHoCH pattern detected)");
             return CONTINUATION;
+        }
+
+        private void GateTrendChange(int rawDir, int rawStatus, int prevDir, int choch)
+        {
+            // ==============================================
+            // GATE TREND CHANGE
+            // ==============================================
+            // When the raw trend reverses vs the previous trend, require CHoCH confirmation.
+            // Without CHoCH, check if structure still supports the previous trend (compression).
+
+            if (prevDir == BULLISH && rawDir == BEARISH)
+            {
+                // Previous was bullish, raw says bearish → need CHoCH bearish to confirm
+                if (choch == CHOCH_BEARISH)
+                {
+                    _swingsDirection = BEARISH;
+                    _trendStatus = rawStatus;
+                }
+                else
+                {
+                    // No CHoCH: check if HH1 > HH4 (structure still supports bullish compression)
+                    if (swingHighCount >= 4 && swingHighPrices[0].SwingPrice > swingHighPrices[3].SwingPrice)
+                    {
+                        _swingsDirection = BULLISH;
+                        _trendStatus = COMPRESSION;
+                    }
+                    else
+                    {
+                        _swingsDirection = NODIRECTION;
+                        _trendStatus = 0;
+                    }
+                }
+
+                if (EnablePrintSwings)
+                    Print($"=> GATE: prevDir=BULLISH, rawDir=BEARISH, choch={choch} => final={_swingsDirection}");
+            }
+            else if (prevDir == BEARISH && rawDir == BULLISH)
+            {
+                // Previous was bearish, raw says bullish → need CHoCH bullish to confirm
+                if (choch == CHOCH_BULLISH)
+                {
+                    _swingsDirection = BULLISH;
+                    _trendStatus = rawStatus;
+                }
+                else
+                {
+                    // No CHoCH: check if LL1 < LL4 (structure still supports bearish compression)
+                    if (swingLowCount >= 4 && swingLowPrices[0].SwingPrice < swingLowPrices[3].SwingPrice)
+                    {
+                        _swingsDirection = BEARISH;
+                        _trendStatus = COMPRESSION;
+                    }
+                    else
+                    {
+                        _swingsDirection = NODIRECTION;
+                        _trendStatus = 0;
+                    }
+                }
+
+                if (EnablePrintSwings)
+                    Print($"=> GATE: prevDir=BEARISH, rawDir=BULLISH, choch={choch} => final={_swingsDirection}");
+            }
+            else
+            {
+                // No reversal, pass through raw direction
+                _swingsDirection = rawDir;
+                _trendStatus = rawStatus;
+            }
         }
 
         private void DisplaySwingsTrend()

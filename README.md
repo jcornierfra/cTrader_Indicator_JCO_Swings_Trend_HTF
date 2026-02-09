@@ -8,7 +8,8 @@ A cTrader indicator for detecting swing highs and lows on a higher timeframe (HT
 
 - **Trend Detection**: Identifies BULLISH (Higher Lows) / BEARISH (Lower Highs) / UNCLEAR market structure
 - **Trend Status**: Momentum (perfect trend) vs Compression (slowdown/consolidation)
-- **CHoCH Detection**: Change of Character - first sign of potential reversal
+- **Gate Trend Change**: Trend reversal requires CHoCH confirmation to prevent premature flips
+- **CHoCH Detection**: Change of Character - first sign of potential reversal (uses previous trend direction)
 - **Liquidity Sweep Detection**: Identifies institutional stop hunting patterns
 - **Swing Alternation**: Enforces High-Low-High-Low sequence
 - **Confirmation Logic**: Waits for closed candles before confirming swings
@@ -55,21 +56,35 @@ Based on **Lower Highs** (HH1 < HH2 < HH3):
 - **Momentum**: HH1 < HH2 AND LL1 < LL2 (perfect downtrend)
 - **Compression**: HH1 < HH2 BUT LL1 > LL2 (lows are blocked)
 
+## Gate Trend Change
+
+Trend reversals require CHoCH confirmation to prevent premature flips. The gate compares the raw trend (swings 0,1,2) against the previous trend (swings 1,2,3):
+
+| Previous Trend | Raw Trend | CHoCH | Result |
+|----------------|-----------|-------|--------|
+| BULLISH | BEARISH | CHoCH Bearish | BEARISH (confirmed reversal) |
+| BULLISH | BEARISH | None | BULLISH Compression if HH1 > HH4, else UNCLEAR |
+| BEARISH | BULLISH | CHoCH Bullish | BULLISH (confirmed reversal) |
+| BEARISH | BULLISH | None | BEARISH Compression if LL1 < LL4, else UNCLEAR |
+| Same | Same | - | Pass through raw direction |
+
 ## CHoCH (Change of Character)
 
-CHoCH is an early warning signal of potential trend reversal:
+CHoCH is an early warning signal of potential trend reversal. It uses the previous trend direction (calculated from swings 1,2,3) to detect transitions:
 
 ### CHoCH Bullish
-- Previous bearish structure: HH2 < HH3 (lower highs)
+
+- Previous trend was NOT bullish (or HH2 < HH3 if no previous trend available)
 - Break: HH1 > HH2
 - Candle must close above HH2
 
 ### CHoCH Bearish
-- Previous bullish structure: LL2 > LL3 (higher lows)
+
+- Previous trend was NOT bearish (or LL2 > LL3 if no previous trend available)
 - Break: LL1 < LL2
 - Candle must close below LL2
 
-> **Note**: CHoCH is an alert only. It can be a liquidity grab (fake out) or a real reversal. Wait for BOS (Break of Structure) to confirm.
+> **Note**: CHoCH is used by the Gate to confirm trend reversals. Without CHoCH, the gate maintains the previous trend as Compression or falls back to UNCLEAR.
 
 ## Liquidity Sweep Detection
 
@@ -91,6 +106,7 @@ Detects institutional stop hunting patterns when price sweeps a swing level and 
 
 ## Version History
 
+- **v1.6** (2026-02-09): Gate Trend Change - reversals require CHoCH confirmation (aligned with TradingView v1.2)
 - **v1.5** (2026-02-05): New liquidity sweep detection logic (aligned with TradingView version)
 - **v1.4** (2026-02-04): Added Momentum/Compression status, simplified CHoCH, fixed swing confirmation
 - **v1.3** (2026-02-02): Added CHoCH detection
