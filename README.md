@@ -10,6 +10,7 @@ A cTrader indicator for detecting swing highs and lows on a higher timeframe (HT
 - **Trend Status**: Momentum (perfect trend) vs Compression (slowdown/consolidation)
 - **Gate Trend Change**: Trend reversal requires CHoCH confirmation to prevent premature flips
 - **CHoCH Detection**: Change of Character - first sign of potential reversal (uses previous trend direction)
+- **Dual CHoCH Liquidity Sweep**: When both CHoCH Bullish and Bearish are detected simultaneously, the most recent one wins and the opposing CHoCH is identified as a liquidity sweep
 - **Liquidity Sweep Detection**: Identifies institutional stop hunting patterns
 - **Swing Alternation**: Enforces High-Low-High-Low sequence
 - **Confirmation Logic**: Waits for closed candles before confirming swings
@@ -86,6 +87,19 @@ CHoCH is an early warning signal of potential trend reversal. It uses the previo
 
 > **Note**: CHoCH is used by the Gate to confirm trend reversals. Without CHoCH, the gate maintains the previous trend as Compression or falls back to UNCLEAR.
 
+### Dual CHoCH (Liquidity Sweep Pattern)
+
+When both CHoCH Bullish and CHoCH Bearish are detected simultaneously (using structure-based analysis: HH2 < HH3 and LL2 > LL3), the indicator compares swing timestamps to determine priority:
+
+| Previous Trend | Most Recent CHoCH | Result |
+|----------------|-------------------|--------|
+| BULLISH | CHoCH Bullish (SH0 > SL0) | Trend restored to BULLISH Momentum + Liquidity Sweep |
+| BEARISH | CHoCH Bearish (SL0 > SH0) | Trend restored to BEARISH Momentum + Liquidity Sweep |
+| BULLISH | CHoCH Bearish (SL0 > SH0) | Normal CHoCH Bearish (potential reversal) |
+| BEARISH | CHoCH Bullish (SH0 > SL0) | Normal CHoCH Bullish (potential reversal) |
+
+**Example**: In a BULLISH trend, price dips below the previous low (CHoCH Bearish), then reverses and makes a new high (CHoCH Bullish, more recent). The bearish dip is identified as a liquidity sweep, and the bullish trend is restored with Momentum status.
+
 ## Liquidity Sweep Detection
 
 Detects institutional stop hunting patterns when price sweeps a swing level and reverses.
@@ -106,6 +120,7 @@ Detects institutional stop hunting patterns when price sweeps a swing level and 
 
 ## Version History
 
+- **v1.7** (2026-02-10): Dual CHoCH detection - when both CHoCH exist, prioritizes the most recent; identifies opposing CHoCH as liquidity sweep
 - **v1.6** (2026-02-09): Gate Trend Change - reversals require CHoCH confirmation (aligned with TradingView v1.2)
 - **v1.5** (2026-02-05): New liquidity sweep detection logic (aligned with TradingView version)
 - **v1.4** (2026-02-04): Added Momentum/Compression status, simplified CHoCH, fixed swing confirmation

@@ -1,8 +1,8 @@
 // =====================================================
 // JCO Swings Trend HTF Indicator
 // =====================================================
-// Version: 1.6
-// Date: 2026-02-09
+// Version: 1.7
+// Date: 2026-02-10
 // Author: Jerome Cornier
 // GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
 //
@@ -20,6 +20,14 @@
 // - Swing confirmation waits for closed candles on both sides
 //
 // Changelog:
+// v1.7 (2026-02-10)
+//   - Dual CHoCH detection: detects both CHoCH Bullish and Bearish simultaneously
+//   - When both CHoCH exist, prioritizes the most recent one (by swing timestamp)
+//   - Dual CHoCH liquidity sweep: if the most recent CHoCH matches the previous trend,
+//     the opposing CHoCH is identified as a liquidity sweep and the trend is restored
+//   - Example: Bullish trend → CHoCH Bearish (dip) → CHoCH Bullish (more recent)
+//     = liquidity sweep detected, trend restored to Bullish Momentum
+//
 // v1.6 (2026-02-09)
 //   - Added Gate Trend Change (aligned with TradingView v1.2)
 //     * Trend reversal requires CHoCH confirmation
@@ -204,13 +212,16 @@ namespace cAlgo.Indicators
                 int rawDir = CalculateSwingsTrend(0, out int rawStatus);
 
                 // 3. Check for CHoCH (Change of Character) using previous trend direction
-                _chochStatus = CalculateCHoCH(prevDir, hasPrevTrend);
+                bool chochLiqSweep;
+                _chochStatus = CalculateCHoCH(prevDir, hasPrevTrend, out chochLiqSweep);
 
                 // 4. Gate trend change: require CHoCH confirmation for reversals
-                GateTrendChange(rawDir, rawStatus, prevDir, _chochStatus);
+                // Reset liquidity sweep before gate (gate may flag dual CHoCH sweep)
+                _liquiditySweep = false;
+                GateTrendChange(rawDir, rawStatus, prevDir, _chochStatus, chochLiqSweep);
 
-                // 5. Search for liquidity sweep based on the gated direction
-                _liquiditySweep = CalculateLiquiditySweep();
+                // 5. Search for liquidity sweep (combine CHoCH sweep + swing analysis)
+                _liquiditySweep = _liquiditySweep || CalculateLiquiditySweep();
                 
                 // Draw the swings
                 if(DrawSwingIcons || DrawSwingDots)
@@ -712,8 +723,10 @@ namespace cAlgo.Indicators
             return false;
         }
 
-        private int CalculateCHoCH(int prevDir, bool hasPrevTrend)
+        private int CalculateCHoCH(int prevDir, bool hasPrevTrend, out bool chochLiquiditySweep)
         {
+            chochLiquiditySweep = false;
+
             // Need at least 3 highs and 3 lows for CHoCH detection
             if (swingHighCount < 3 || swingLowCount < 3)
                 return CONTINUATION;
@@ -725,43 +738,83 @@ namespace cAlgo.Indicators
             double hh1CandleClose = (hh1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[hh1HTFIndex] : 0;
             double ll1CandleClose = (ll1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[ll1HTFIndex] : 0;
 
+            // ============================================
+            // CHoCH BULLISH conditions
+            // ============================================
+            bool hh1AboveHH2 = swingHighPrices[0].SwingPrice > swingHighPrices[1].SwingPrice;
+            bool hh1CandleClosedAboveHH2 = hh1CandleClose > swingHighPrices[1].SwingPrice;
+            bool prevHighsDeclining = swingHighPrices[1].SwingPrice < swingHighPrices[2].SwingPrice; // HH2 < HH3
+            bool prevNotBullish = hasPrevTrend ? (prevDir != BULLISH) : prevHighsDeclining;
+
+            // Structure-based (independent of prevDir, uses HH2 < HH3)
+            bool bullishByStructure = prevHighsDeclining && hh1AboveHH2 && hh1CandleClosedAboveHH2;
+            // PrevDir-based (original single CHoCH logic)
+            bool bullishByPrev = prevNotBullish && hh1AboveHH2 && hh1CandleClosedAboveHH2;
+
+            // ============================================
+            // CHoCH BEARISH conditions
+            // ============================================
+            bool ll1BelowLL2 = swingLowPrices[0].SwingPrice < swingLowPrices[1].SwingPrice;
+            bool ll1CandleClosedBelowLL2 = ll1CandleClose < swingLowPrices[1].SwingPrice;
+            bool prevLowsRising = swingLowPrices[1].SwingPrice > swingLowPrices[2].SwingPrice; // LL2 > LL3
+            bool prevNotBearish = hasPrevTrend ? (prevDir != BEARISH) : prevLowsRising;
+
+            // Structure-based (independent of prevDir, uses LL2 > LL3)
+            bool bearishByStructure = prevLowsRising && ll1BelowLL2 && ll1CandleClosedBelowLL2;
+            // PrevDir-based (original single CHoCH logic)
+            bool bearishByPrev = prevNotBearish && ll1BelowLL2 && ll1CandleClosedBelowLL2;
+
             if (EnablePrintSwings)
             {
                 Print($"=== CHoCH ANALYSIS ===");
                 Print($"HH3={swingHighPrices[2].SwingPrice:F5}, HH2={swingHighPrices[1].SwingPrice:F5}, HH1={swingHighPrices[0].SwingPrice:F5}");
                 Print($"LL3={swingLowPrices[2].SwingPrice:F5}, LL2={swingLowPrices[1].SwingPrice:F5}, LL1={swingLowPrices[0].SwingPrice:F5}");
                 Print($"PrevDir={prevDir}, HasPrevTrend={hasPrevTrend}");
-                Print($"HH1 candle close={hh1CandleClose:F5}, LL1 candle close={ll1CandleClose:F5}");
+                Print($"BullishByStructure={bullishByStructure}, BearishByStructure={bearishByStructure}");
             }
 
             // ============================================
-            // CHoCH BULLISH: previous trend was NOT bullish + higher high with close confirmation
-            // When hasPrevTrend, use prevDir. Otherwise fall back to direct structure check (HH2 < HH3)
+            // DUAL CHoCH: both structural conditions are true
+            // Compare timestamps to determine which is more recent
+            // If the most recent matches prevDir → liquidity sweep pattern
             // ============================================
-            bool hh1AboveHH2 = swingHighPrices[0].SwingPrice > swingHighPrices[1].SwingPrice;
-            bool hh1CandleClosedAboveHH2 = hh1CandleClose > swingHighPrices[1].SwingPrice;
-            bool prevNotBullish = hasPrevTrend
-                ? (prevDir != BULLISH)
-                : (swingHighPrices[1].SwingPrice < swingHighPrices[2].SwingPrice); // HH2 < HH3
+            if (bullishByStructure && bearishByStructure)
+            {
+                DateTime sh0Time = swingHighPrices[0].SwingHTFOpenTime;
+                DateTime sl0Time = swingLowPrices[0].SwingHTFOpenTime;
 
-            if (prevNotBullish && hh1AboveHH2 && hh1CandleClosedAboveHH2)
+                if (sh0Time > sl0Time)
+                {
+                    // CHoCH Bullish is more recent
+                    if (hasPrevTrend && prevDir == BULLISH)
+                        chochLiquiditySweep = true;
+
+                    if (EnablePrintSwings)
+                        Print($"=> DUAL CHoCH: Bullish wins (SH0 {sh0Time} > SL0 {sl0Time}), LiqSweep={chochLiquiditySweep}");
+                    return CHOCH_BULLISH;
+                }
+                else
+                {
+                    // CHoCH Bearish is more recent
+                    if (hasPrevTrend && prevDir == BEARISH)
+                        chochLiquiditySweep = true;
+
+                    if (EnablePrintSwings)
+                        Print($"=> DUAL CHoCH: Bearish wins (SL0 {sl0Time} > SH0 {sh0Time}), LiqSweep={chochLiquiditySweep}");
+                    return CHOCH_BEARISH;
+                }
+            }
+
+            // ============================================
+            // SINGLE CHoCH detection (using prevDir when available)
+            // ============================================
+            if (bullishByPrev)
             {
                 if (EnablePrintSwings)
                     Print($"=> CHoCH BULLISH: prevDir={prevDir}, HH1 > HH2, candle closed above HH2");
                 return CHOCH_BULLISH;
             }
-
-            // ============================================
-            // CHoCH BEARISH: previous trend was NOT bearish + lower low with close confirmation
-            // When hasPrevTrend, use prevDir. Otherwise fall back to direct structure check (LL2 > LL3)
-            // ============================================
-            bool ll1BelowLL2 = swingLowPrices[0].SwingPrice < swingLowPrices[1].SwingPrice;
-            bool ll1CandleClosedBelowLL2 = ll1CandleClose < swingLowPrices[1].SwingPrice;
-            bool prevNotBearish = hasPrevTrend
-                ? (prevDir != BEARISH)
-                : (swingLowPrices[1].SwingPrice > swingLowPrices[2].SwingPrice); // LL2 > LL3
-
-            if (prevNotBearish && ll1BelowLL2 && ll1CandleClosedBelowLL2)
+            if (bearishByPrev)
             {
                 if (EnablePrintSwings)
                     Print($"=> CHoCH BEARISH: prevDir={prevDir}, LL1 < LL2, candle closed below LL2");
@@ -774,8 +827,24 @@ namespace cAlgo.Indicators
             return CONTINUATION;
         }
 
-        private void GateTrendChange(int rawDir, int rawStatus, int prevDir, int choch)
+        private void GateTrendChange(int rawDir, int rawStatus, int prevDir, int choch, bool chochLiquiditySweep)
         {
+            // ==============================================
+            // DUAL CHoCH LIQUIDITY SWEEP
+            // ==============================================
+            // Both CHoCH detected, the most recent matches prevDir
+            // → the opposing CHoCH was a liquidity sweep, restore previous trend
+            if (chochLiquiditySweep)
+            {
+                _swingsDirection = prevDir;
+                _trendStatus = MOMENTUM;
+                _liquiditySweep = true;
+
+                if (EnablePrintSwings)
+                    Print($"=> GATE: Dual CHoCH liquidity sweep, restoring prevDir={prevDir}");
+                return;
+            }
+
             // ==============================================
             // GATE TREND CHANGE
             // ==============================================
