@@ -27,6 +27,7 @@
 //     the opposing CHoCH is identified as a liquidity sweep and the trend is restored
 //   - Example: Bullish trend → CHoCH Bearish (dip) → CHoCH Bullish (more recent)
 //     = liquidity sweep detected, trend restored to Bullish Momentum
+//   - Added Pip Value parameter (default 0.1) for custom expansion calculation
 //
 // v1.6 (2026-02-09)
 //   - Added Gate Trend Change (aligned with TradingView v1.2)
@@ -91,6 +92,9 @@ namespace cAlgo.Indicators
 
         [Parameter("Swing Time Frame", DefaultValue = "H1", Group = "Swings H & L")]
         public TimeFrame SwingTimeFrame { get; set; }
+
+        [Parameter("Pip Value", DefaultValue = 0.1, Group = "Swings H & L")]
+        public double PipValue { get; set; }
 
         [Parameter("Draw icons", DefaultValue = true, Group = "Swings Chart")]
         public bool DrawSwingIcons { get; set; }
@@ -983,7 +987,7 @@ namespace cAlgo.Indicators
             if (swingHighCount > 0 && swingLowCount > 0)
             {
                 double _swingsExpansion = swingHighPrices[0].SwingPrice - swingLowPrices[0].SwingPrice;
-                _swingsExpansion /= Symbol.PipSize;
+                _swingsExpansion /= PipValue;
                 _swingsExpansion = Math.Round(_swingsExpansion, 2);
 
                 dashBoard = "\n\n\n\nSwing Expansion in pips:\t" + _swingsExpansion;

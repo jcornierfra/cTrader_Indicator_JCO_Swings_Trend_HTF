@@ -28,6 +28,7 @@ A cTrader indicator for detecting swing highs and lows on a higher timeframe (HT
 | Swing Period | 5 | Number of candles for fractal detection (left + right) |
 | Swing Lookback Period | 200 | How many swings to analyze |
 | Swing Time Frame | H1 | Higher timeframe for swing detection |
+| Pip Value | 0.1 | Value of one pip for expansion calculation (e.g. 0.1 for gold) |
 | Draw Icons | true | Show arrows at swing points |
 | Draw Dots | true | Show dots at swing points |
 | Icon Gap (%) | 2.0 | Gap between icon and candle (% of chart height) |
@@ -120,7 +121,7 @@ Detects institutional stop hunting patterns when price sweeps a swing level and 
 
 ## Version History
 
-- **v1.7** (2026-02-10): Dual CHoCH detection - when both CHoCH exist, prioritizes the most recent; identifies opposing CHoCH as liquidity sweep
+- **v1.7** (2026-02-10): Dual CHoCH detection with liquidity sweep pattern; added Pip Value parameter for custom expansion calculation
 - **v1.6** (2026-02-09): Gate Trend Change - reversals require CHoCH confirmation (aligned with TradingView v1.2)
 - **v1.5** (2026-02-05): New liquidity sweep detection logic (aligned with TradingView version)
 - **v1.4** (2026-02-04): Added Momentum/Compression status, simplified CHoCH, fixed swing confirmation
