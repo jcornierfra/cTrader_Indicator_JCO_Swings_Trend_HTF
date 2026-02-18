@@ -90,16 +90,16 @@ CHoCH is an early warning signal of potential trend reversal. It uses the previo
 
 ### Dual CHoCH (Liquidity Sweep Pattern)
 
-When both CHoCH Bullish and CHoCH Bearish are detected simultaneously (using structure-based analysis: HH2 < HH3 and LL2 > LL3), the indicator compares swing timestamps to determine priority:
+When both CHoCH Bullish and CHoCH Bearish are detected simultaneously (using structure-based analysis: HH2 < HH3 and LL2 > LL3), the indicator uses the **most recent swing type** (tracked via `LastWasHigh` after alternation) to determine priority:
 
-| Previous Trend | Most Recent CHoCH | Result |
-|----------------|-------------------|--------|
-| BULLISH | CHoCH Bullish (SH0 > SL0) | Trend restored to BULLISH Momentum + Liquidity Sweep |
-| BEARISH | CHoCH Bearish (SL0 > SH0) | Trend restored to BEARISH Momentum + Liquidity Sweep |
-| BULLISH | CHoCH Bearish (SL0 > SH0) | Normal CHoCH Bearish (potential reversal) |
-| BEARISH | CHoCH Bullish (SH0 > SL0) | Normal CHoCH Bullish (potential reversal) |
+| Last Swing Type | CHoCH Winner | Previous Trend | Result |
+|-----------------|--------------|----------------|--------|
+| High | CHoCH Bullish | BULLISH | Trend restored to BULLISH Momentum + Liquidity Sweep |
+| Low | CHoCH Bearish | BEARISH | Trend restored to BEARISH Momentum + Liquidity Sweep |
+| High | CHoCH Bullish | BEARISH | Normal CHoCH Bullish (potential reversal) |
+| Low | CHoCH Bearish | BULLISH | Normal CHoCH Bearish (potential reversal) |
 
-**Example**: In a BULLISH trend, price dips below the previous low (CHoCH Bearish), then reverses and makes a new high (CHoCH Bullish, more recent). The bearish dip is identified as a liquidity sweep, and the bullish trend is restored with Momentum status.
+**Example**: In a BULLISH trend, price dips below the previous low (CHoCH Bearish), then reverses and makes a new high (last swing = High → CHoCH Bullish wins). The bearish dip is identified as a liquidity sweep, and the bullish trend is restored with Momentum status.
 
 ## Liquidity Sweep Detection
 
@@ -121,6 +121,7 @@ Detects institutional stop hunting patterns when price sweeps a swing level and 
 
 ## Version History
 
+- **v1.8** (2026-02-18): Close-based trend calculation; _lastWasHigh for dual CHoCH tie-breaking (aligned with Multi TF v2.2)
 - **v1.7** (2026-02-10): Dual CHoCH detection with liquidity sweep pattern; added Pip Value parameter for custom expansion calculation
 - **v1.6** (2026-02-09): Gate Trend Change - reversals require CHoCH confirmation (aligned with TradingView v1.2)
 - **v1.5** (2026-02-05): New liquidity sweep detection logic (aligned with TradingView version)

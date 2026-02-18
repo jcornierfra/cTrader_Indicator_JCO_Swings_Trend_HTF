@@ -1,8 +1,8 @@
 // =====================================================
 // JCO Swings Trend HTF Indicator
 // =====================================================
-// Version: 1.7
-// Date: 2026-02-10
+// Version: 1.8
+// Date: 2026-02-18
 // Author: Jerome Cornier
 // GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
 //
@@ -20,6 +20,17 @@
 // - Swing confirmation waits for closed candles on both sides
 //
 // Changelog:
+// v1.8 (2026-02-18)
+//   - Close-based trend calculation: CalculateSwingsTrend now uses pivot close prices
+//     instead of high/low to filter liquidity wicks
+//     (CHoCH, liquidity sweep and expansion remain on high/low prices)
+//   - Swing.ClosePrice field added; stored in DetectSwings and FindMissingSwing
+//   - Close prices used directly from Swing.ClosePrice in CalculateCHoCH and
+//     CalculateLiquiditySweep (replaces runtime HTF bar lookup)
+//   - Dual CHoCH tie-breaking: uses _lastWasHigh (most recent swing type in alternation)
+//     instead of comparing swing timestamps - aligned with Multi TF v2.2
+//   - _lastWasHigh field added; updated at end of ForceSwingAlternation
+//
 // v1.7 (2026-02-10)
 //   - Dual CHoCH detection: detects both CHoCH Bullish and Bearish simultaneously
 //   - When both CHoCH exist, prioritizes the most recent one (by swing timestamp)
@@ -118,7 +129,8 @@ namespace cAlgo.Indicators
         {
             public DateTime SwingHTFOpenTime { get; set; }
             public DateTime SwingChartOpenTime { get; set; }
-            public double   SwingPrice { get; set; }        // HTF price for calculations
+            public double   SwingPrice { get; set; }        // HTF bar high/low (CHoCH, liq sweep, expansion)
+            public double   ClosePrice { get; set; }        // HTF bar close at pivot candle (trend calculation)
             public double   DisplayPrice { get; set; }      // Chart price for visual display
             public int      SwingBarsIndex { get; set; }
         }
@@ -139,6 +151,7 @@ namespace cAlgo.Indicators
         private int swingLowCount;
         
         private int _swingsDirection;
+        private bool _lastWasHigh;   // type of the most recent swing in alternation (for dual CHoCH tie-breaking)
         private const int NODIRECTION = 0;
         private const int BULLISH = 1;
         private const int BEARISH = -1;
@@ -285,7 +298,8 @@ namespace cAlgo.Indicators
                             {
                                 SwingHTFOpenTime = swingBars.OpenTimes[i],
                                 SwingChartOpenTime = Bars.OpenTimes[chartIndex],
-                                SwingPrice = swingBars.HighPrices[i],      // HTF price for calculations
+                                SwingPrice = swingBars.HighPrices[i],       // HTF high/low for CHoCH, liq sweep, expansion
+                                ClosePrice = swingBars.ClosePrices[i],      // HTF close for trend calculation
                                 DisplayPrice = Bars.HighPrices[chartIndex], // Chart price for display
                                 SwingBarsIndex = startIndex
                             };
@@ -328,7 +342,8 @@ namespace cAlgo.Indicators
                             {
                                 SwingHTFOpenTime = swingBars.OpenTimes[i],
                                 SwingChartOpenTime = Bars.OpenTimes[chartIndex],
-                                SwingPrice = swingBars.LowPrices[i],      // HTF price for calculations
+                                SwingPrice = swingBars.LowPrices[i],       // HTF high/low for CHoCH, liq sweep, expansion
+                                ClosePrice = swingBars.ClosePrices[i],     // HTF close for trend calculation
                                 DisplayPrice = Bars.LowPrices[chartIndex], // Chart price for display
                                 SwingBarsIndex = startIndex
                             };
@@ -403,6 +418,9 @@ namespace cAlgo.Indicators
                 foreach (var s in correctedSwings)
                     Print($"{s.Type} @ {s.Swing.SwingHTFOpenTime:yyyy-MM-dd HH:mm} - Price: {s.Swing.SwingPrice:F5}");
             }
+
+            // Track the type of the most recent swing (used for dual CHoCH tie-breaking)
+            _lastWasHigh = correctedSwings[correctedSwings.Count - 1].Type == SwingType.High;
 
             // Étape 3: Reconstruire les tableaux séparés High/Low
             swingHighCount = 0;
@@ -486,6 +504,7 @@ namespace cAlgo.Indicators
                 SwingHTFOpenTime = swingBars.OpenTimes[bestIdx],
                 SwingChartOpenTime = Bars.OpenTimes[chartIndex],
                 SwingPrice = (missingType == SwingType.High) ? swingBars.HighPrices[bestIdx] : swingBars.LowPrices[bestIdx],
+                ClosePrice = swingBars.ClosePrices[bestIdx],
                 DisplayPrice = (missingType == SwingType.High) ? Bars.HighPrices[chartIndex] : Bars.LowPrices[chartIndex],
                 SwingBarsIndex = chartStartIndex
             };
@@ -577,12 +596,14 @@ namespace cAlgo.Indicators
                 return NODIRECTION;
             }
 
-            double sh0 = swingHighPrices[0 + offset].SwingPrice;
-            double sh1 = swingHighPrices[1 + offset].SwingPrice;
-            double sh2 = swingHighPrices[2 + offset].SwingPrice;
-            double sl0 = swingLowPrices[0 + offset].SwingPrice;
-            double sl1 = swingLowPrices[1 + offset].SwingPrice;
-            double sl2 = swingLowPrices[2 + offset].SwingPrice;
+            // Use close prices for trend detection to filter liquidity wicks
+            // (CHoCH, liquidity sweep and expansion continue to use SwingPrice high/low)
+            double sh0 = swingHighPrices[0 + offset].ClosePrice;
+            double sh1 = swingHighPrices[1 + offset].ClosePrice;
+            double sh2 = swingHighPrices[2 + offset].ClosePrice;
+            double sl0 = swingLowPrices[0 + offset].ClosePrice;
+            double sl1 = swingLowPrices[1 + offset].ClosePrice;
+            double sl2 = swingLowPrices[2 + offset].ClosePrice;
 
             // ==============================================
             // TWO-LEVEL LOGIC: Primary + Secondary Confirmation
@@ -651,11 +672,9 @@ namespace cAlgo.Indicators
             // Detects when price sweeps a swing level and reverses
             // Notation: Low0/High0 = most recent (LL1/HH1), Low1/High1 = previous (LL2/HH2), etc.
 
-            // Get the close price of the HTF candle that formed LL1 and HH1
-            int ll1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingLowPrices[0].SwingHTFOpenTime);
-            int hh1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingHighPrices[0].SwingHTFOpenTime);
-            double ll1CandleClose = (ll1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[ll1HTFIndex] : 0;
-            double hh1CandleClose = (hh1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[hh1HTFIndex] : 0;
+            // Close prices stored directly on the swing object (set in DetectSwings/FindMissingSwing)
+            double ll1CandleClose = swingLowPrices[0].ClosePrice;
+            double hh1CandleClose = swingHighPrices[0].ClosePrice;
 
             // Swing prices (using index notation: 0 = most recent)
             double low0 = swingLowPrices[0].SwingPrice;   // LL1
@@ -735,12 +754,9 @@ namespace cAlgo.Indicators
             if (swingHighCount < 3 || swingLowCount < 3)
                 return CONTINUATION;
 
-            // Get the close price of the HTF candle that formed HH1 and LL1
-            int hh1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingHighPrices[0].SwingHTFOpenTime);
-            int ll1HTFIndex = swingBarsHTF.OpenTimes.GetIndexByTime(swingLowPrices[0].SwingHTFOpenTime);
-
-            double hh1CandleClose = (hh1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[hh1HTFIndex] : 0;
-            double ll1CandleClose = (ll1HTFIndex >= 0) ? swingBarsHTF.ClosePrices[ll1HTFIndex] : 0;
+            // Close prices stored directly on the swing object (set in DetectSwings/FindMissingSwing)
+            double hh1CandleClose = swingHighPrices[0].ClosePrice;
+            double ll1CandleClose = swingLowPrices[0].ClosePrice;
 
             // ============================================
             // CHoCH BULLISH conditions
@@ -779,32 +795,29 @@ namespace cAlgo.Indicators
 
             // ============================================
             // DUAL CHoCH: both structural conditions are true
-            // Compare timestamps to determine which is more recent
-            // If the most recent matches prevDir → liquidity sweep pattern
+            // Use _lastWasHigh (most recent swing type in alternation) to determine which wins
+            // If the winning CHoCH matches prevDir → the other CHoCH was a liquidity sweep
             // ============================================
             if (bullishByStructure && bearishByStructure)
             {
-                DateTime sh0Time = swingHighPrices[0].SwingHTFOpenTime;
-                DateTime sl0Time = swingLowPrices[0].SwingHTFOpenTime;
-
-                if (sh0Time > sl0Time)
+                if (_lastWasHigh)
                 {
-                    // CHoCH Bullish is more recent
+                    // Last accepted swing was a High → CHoCH Bullish wins
                     if (hasPrevTrend && prevDir == BULLISH)
                         chochLiquiditySweep = true;
 
                     if (EnablePrintSwings)
-                        Print($"=> DUAL CHoCH: Bullish wins (SH0 {sh0Time} > SL0 {sl0Time}), LiqSweep={chochLiquiditySweep}");
+                        Print($"=> DUAL CHoCH: Bullish wins (LastWasHigh=true), LiqSweep={chochLiquiditySweep}");
                     return CHOCH_BULLISH;
                 }
                 else
                 {
-                    // CHoCH Bearish is more recent
+                    // Last accepted swing was a Low → CHoCH Bearish wins
                     if (hasPrevTrend && prevDir == BEARISH)
                         chochLiquiditySweep = true;
 
                     if (EnablePrintSwings)
-                        Print($"=> DUAL CHoCH: Bearish wins (SL0 {sl0Time} > SH0 {sh0Time}), LiqSweep={chochLiquiditySweep}");
+                        Print($"=> DUAL CHoCH: Bearish wins (LastWasHigh=false), LiqSweep={chochLiquiditySweep}");
                     return CHOCH_BEARISH;
                 }
             }
