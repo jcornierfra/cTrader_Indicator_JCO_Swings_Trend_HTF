@@ -1,7 +1,7 @@
 // =====================================================
 // JCO Swings Trend HTF Indicator
 // =====================================================
-// Version: 1.8
+// Version: 1.9
 // Date: 2026-02-18
 // Author: Jerome Cornier
 // GitHub: https://github.com/jcornierfra/cTrader_Indicator_JCO_Swings_Trend_HTF
@@ -20,6 +20,13 @@
 // - Swing confirmation waits for closed candles on both sides
 //
 // Changelog:
+// v1.9 (2026-02-18)
+//   - Force loading of additional HTF bars in Initialize() via LoadMoreHistory()
+//     to fix incorrect data when chart TF is much lower than swing TF
+//     (e.g. M1 chart + D1 swings: cTrader default loads only ~3 D1 bars)
+//   - Loop calls LoadMoreHistory() until SwingLookbackPeriod + 50 bars are loaded
+//     or max 10 attempts are reached
+//
 // v1.8 (2026-02-18)
 //   - Close-based trend calculation: CalculateSwingsTrend now uses pivot close prices
 //     instead of high/low to filter liquidity wicks
@@ -173,7 +180,22 @@ namespace cAlgo.Indicators
         
             // Initialize the Bars array of the given timeframe for Swings
             swingBarsHTF = MarketData.GetBars(SwingTimeFrame);
-            
+
+            // Force loading of additional historical HTF bars.
+            // Required when the chart TF is much lower than the swing TF (e.g. M1 chart + D1 swings):
+            // cTrader only loads HTF bars proportional to the chart's time range by default,
+            // which may not be enough to cover SwingLookbackPeriod HTF bars.
+            // LoadMoreHistory() is called multiple times to ensure enough data is loaded.
+            int htfBarsNeeded = SwingLookbackPeriod + 50; // buffer on top of lookback
+            int maxAttempts = 10;
+            for (int attempt = 0; attempt < maxAttempts && swingBarsHTF.Count < htfBarsNeeded; attempt++)
+            {
+                swingBarsHTF.LoadMoreHistory();
+            }
+
+            if (EnablePrintSwings)
+                Print($"HTF bars loaded: {swingBarsHTF.Count} (needed: {htfBarsNeeded})");
+
             // Initialize the Swing arrays
             swingHighPrices = new Swing[SwingLookbackPeriod];
             swingLowPrices = new Swing[SwingLookbackPeriod];
