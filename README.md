@@ -121,7 +121,7 @@ Detects institutional stop hunting patterns when price sweeps a swing level and 
 
 ## Version History
 
-- **v1.9** (2026-02-18): Fix data loading on low chart timeframes - force HTF bars via LoadMoreHistory() in Initialize()
+- **v1.9** (2026-02-18): Fix low chart TF compatibility - HTF swings older than chart's loaded range now stored with HTF price fallback instead of being discarded; icons/dots skipped for those swings
 - **v1.8** (2026-02-18): Close-based trend calculation; _lastWasHigh for dual CHoCH tie-breaking (aligned with Multi TF v2.2)
 - **v1.7** (2026-02-10): Dual CHoCH detection with liquidity sweep pattern; added Pip Value parameter for custom expansion calculation
 - **v1.6** (2026-02-09): Gate Trend Change - reversals require CHoCH confirmation (aligned with TradingView v1.2)

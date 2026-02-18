@@ -21,12 +21,16 @@
 //
 // Changelog:
 // v1.9 (2026-02-18)
-//   - Force loading of additional chart bars via Bars.LoadMoreHistory() (up to 50 attempts)
-//     Root cause: on low chart TFs (M5, M1), GetIndexByTime() returns -1 for HTF bars
-//     older than the chart's loaded range, causing those HTF bars to be silently skipped
-//     (e.g. M5 chart with D1 swings needs 200*288=57,600 M5 bars to cover 200 D1 bars)
-//   - HTF bar loading kept (10 attempts) as a guard for the opposite direction
-//   - candleRangeInHTF now calculated first in Initialize() to be used for chart bar estimate
+//   - Fix low chart TF compatibility (e.g. M3 chart with D1 swings)
+//     Root cause: GetIndexByTime() returns -1 for HTF bars older than the chart's loaded range,
+//     causing those HTF bars to be silently skipped and too few swings found for calculations
+//   - When startIndex < 0, HTF swings are now stored using HTF prices as fallback for
+//     SwingChartOpenTime and DisplayPrice instead of being discarded with 'continue'
+//     Calculations (trend, CHoCH, liquidity sweep) work correctly since they rely only on
+//     SwingPrice and ClosePrice which always come from HTF bars
+//   - Swings with SwingBarsIndex == -1 (no chart bar) are excluded from icon/dot drawing
+//   - Removed Bars.LoadMoreHistory() which crashed the indicator on M3
+//   - HTF bar loading kept (10 attempts) to ensure sufficient HTF history
 //
 // v1.8 (2026-02-18)
 //   - Close-based trend calculation: CalculateSwingsTrend now uses pivot close prices
@@ -191,19 +195,10 @@ namespace cAlgo.Indicators
             for (int attempt = 0; attempt < 10 && swingBarsHTF.Count < htfBarsNeeded; attempt++)
                 swingBarsHTF.LoadMoreHistory();
 
-            // Force loading of additional chart bars.
-            // In DetectSwings, each HTF bar is matched to a chart bar via GetIndexByTime().
-            // If the chart bar is not loaded (too far in history), the HTF bar is skipped,
-            // resulting in too few swings on low chart TFs (M5, M1, etc.).
-            // We need (SwingLookbackPeriod + buffer) * candleRangeInHTF chart bars minimum.
-            int chartBarsNeeded = (SwingLookbackPeriod + 50) * candleRangeInHTF;
-            for (int attempt = 0; attempt < 50 && Bars.Count < chartBarsNeeded; attempt++)
-                Bars.LoadMoreHistory();
-
             if (EnablePrintSwings)
             {
                 Print($"HTF bars loaded: {swingBarsHTF.Count} (needed: {htfBarsNeeded})");
-                Print($"Chart bars loaded: {Bars.Count} (needed: {chartBarsNeeded})");
+                Print($"Chart bars loaded: {Bars.Count}, candleRangeInHTF: {candleRangeInHTF}");
             }
 
             // Initialize the Swing arrays
@@ -299,89 +294,108 @@ namespace cAlgo.Indicators
                 if (IsSwingHigh(swingBars, i, SwingPeriod))
                 {
                     int startIndex = Bars.OpenTimes.GetIndexByTime(swingBars.OpenTimes[i]);
-                    int chartIndex = startIndex;
-                    
-                    if (startIndex < 0)
-                        continue;
-                    
-                    // Look for the exact candle on the Chart that have the wick
-                    int endIndex = Math.Min(startIndex + candleRangeInHTF, Bars.Count - 1);
-                    for (int x = startIndex; x < endIndex; x++)
-                    {
-                        if (Bars.HighPrices[x] > Bars.HighPrices[chartIndex])
-                        {
-                            chartIndex = x;
-                        }
-                    }
-                    
-                    if (EnablePrintSwings)
-                        Print("start index: {0} | Chart index: {1}", startIndex, chartIndex);
-                        
-                    if (chartIndex >= 0)
-                    {
-                        if (EnablePrintSwings)
-                            Print($"Swing High detected at Swing Time Frame Index: {i}, Chart Index: {chartIndex}");
 
-                        // Store the swing high price - USE HTF PRICE for consistency
+                    if (startIndex < 0)
+                    {
+                        // Chart bar not loaded (HTF bar too old for chart's loaded range).
+                        // Store using HTF prices as fallback so calculations still work correctly.
                         if (swingHighCount < SwingLookbackPeriod)
                         {
                             swingHighPrices[swingHighCount++] = new Swing
                             {
                                 SwingHTFOpenTime = swingBars.OpenTimes[i],
-                                SwingChartOpenTime = Bars.OpenTimes[chartIndex],
-                                SwingPrice = swingBars.HighPrices[i],       // HTF high/low for CHoCH, liq sweep, expansion
-                                ClosePrice = swingBars.ClosePrices[i],      // HTF close for trend calculation
-                                DisplayPrice = Bars.HighPrices[chartIndex], // Chart price for display
-                                SwingBarsIndex = startIndex
+                                SwingChartOpenTime = swingBars.OpenTimes[i],  // fallback: HTF time
+                                SwingPrice = swingBars.HighPrices[i],
+                                ClosePrice = swingBars.ClosePrices[i],
+                                DisplayPrice = swingBars.HighPrices[i],       // fallback: HTF price
+                                SwingBarsIndex = -1                           // marks "no chart bar"
                             };
-                            
                             swingFound = true;
                         }
+                        continue;
+                    }
+
+                    // Look for the exact candle on the Chart that has the wick
+                    int chartIndex = startIndex;
+                    int endIndex = Math.Min(startIndex + candleRangeInHTF, Bars.Count - 1);
+                    for (int x = startIndex; x < endIndex; x++)
+                    {
+                        if (Bars.HighPrices[x] > Bars.HighPrices[chartIndex])
+                            chartIndex = x;
+                    }
+
+                    if (EnablePrintSwings)
+                        Print("start index: {0} | Chart index: {1}", startIndex, chartIndex);
+
+                    if (swingHighCount < SwingLookbackPeriod)
+                    {
+                        if (EnablePrintSwings)
+                            Print($"Swing High detected at Swing Time Frame Index: {i}, Chart Index: {chartIndex}");
+
+                        swingHighPrices[swingHighCount++] = new Swing
+                        {
+                            SwingHTFOpenTime = swingBars.OpenTimes[i],
+                            SwingChartOpenTime = Bars.OpenTimes[chartIndex],
+                            SwingPrice = swingBars.HighPrices[i],
+                            ClosePrice = swingBars.ClosePrices[i],
+                            DisplayPrice = Bars.HighPrices[chartIndex],
+                            SwingBarsIndex = startIndex
+                        };
+                        swingFound = true;
                     }
                 }
 
                 if (IsSwingLow(swingBars, i, SwingPeriod))
                 {
                     int startIndex = Bars.OpenTimes.GetIndexByTime(swingBars.OpenTimes[i]);
-                    int chartIndex = startIndex;
-                    
+
                     if (startIndex < 0)
-                        continue;
-
-                    // Look for the exact candle on the Chart that have the wick
-                    int endIndex = Math.Min(startIndex + candleRangeInHTF, Bars.Count - 1);
-                    for (int x = startIndex; x <= endIndex; x++)
                     {
-                        if (Bars.LowPrices[x] < Bars.LowPrices[chartIndex])
-                        {
-                            chartIndex = x;
-                        }
-                    }
-                    
-                    if (EnablePrintSwings)
-                        Print("start index: {0} | Chart index: {1}", startIndex, chartIndex);
-                    
-                    if (chartIndex >= 0)
-                    {
-                        if (EnablePrintSwings)
-                            Print($"Swing Low detected at Swing Time Frame Index: {i}, Chart Index: {chartIndex}");
-
-                        // Store the swing low price - USE HTF PRICE for consistency
+                        // Chart bar not loaded (HTF bar too old for chart's loaded range).
+                        // Store using HTF prices as fallback so calculations still work correctly.
                         if (swingLowCount < SwingLookbackPeriod)
                         {
                             swingLowPrices[swingLowCount++] = new Swing
                             {
                                 SwingHTFOpenTime = swingBars.OpenTimes[i],
-                                SwingChartOpenTime = Bars.OpenTimes[chartIndex],
-                                SwingPrice = swingBars.LowPrices[i],       // HTF high/low for CHoCH, liq sweep, expansion
-                                ClosePrice = swingBars.ClosePrices[i],     // HTF close for trend calculation
-                                DisplayPrice = Bars.LowPrices[chartIndex], // Chart price for display
-                                SwingBarsIndex = startIndex
+                                SwingChartOpenTime = swingBars.OpenTimes[i],  // fallback: HTF time
+                                SwingPrice = swingBars.LowPrices[i],
+                                ClosePrice = swingBars.ClosePrices[i],
+                                DisplayPrice = swingBars.LowPrices[i],        // fallback: HTF price
+                                SwingBarsIndex = -1                           // marks "no chart bar"
                             };
-                            
                             swingFound = true;
                         }
-                        
+                        continue;
+                    }
+
+                    // Look for the exact candle on the Chart that has the wick
+                    int chartIndex = startIndex;
+                    int endIndex = Math.Min(startIndex + candleRangeInHTF, Bars.Count - 1);
+                    for (int x = startIndex; x <= endIndex; x++)
+                    {
+                        if (Bars.LowPrices[x] < Bars.LowPrices[chartIndex])
+                            chartIndex = x;
+                    }
+
+                    if (EnablePrintSwings)
+                        Print("start index: {0} | Chart index: {1}", startIndex, chartIndex);
+
+                    if (swingLowCount < SwingLookbackPeriod)
+                    {
+                        if (EnablePrintSwings)
+                            Print($"Swing Low detected at Swing Time Frame Index: {i}, Chart Index: {chartIndex}");
+
+                        swingLowPrices[swingLowCount++] = new Swing
+                        {
+                            SwingHTFOpenTime = swingBars.OpenTimes[i],
+                            SwingChartOpenTime = Bars.OpenTimes[chartIndex],
+                            SwingPrice = swingBars.LowPrices[i],
+                            ClosePrice = swingBars.ClosePrices[i],
+                            DisplayPrice = Bars.LowPrices[chartIndex],
+                            SwingBarsIndex = startIndex
+                        };
+                        swingFound = true;
                     }
                 }
             }
@@ -509,12 +523,25 @@ namespace cAlgo.Indicators
 
             // Créer le swing manquant
             int chartStartIndex = Bars.OpenTimes.GetIndexByTime(swingBars.OpenTimes[bestIdx]);
-            int chartIndex = chartStartIndex;
+            double htfPrice = (missingType == SwingType.High) ? swingBars.HighPrices[bestIdx] : swingBars.LowPrices[bestIdx];
 
             if (chartStartIndex < 0)
-                return null;
+            {
+                // Chart bar not loaded - use HTF prices as fallback
+                var fallbackSwing = new Swing
+                {
+                    SwingHTFOpenTime = swingBars.OpenTimes[bestIdx],
+                    SwingChartOpenTime = swingBars.OpenTimes[bestIdx],  // fallback: HTF time
+                    SwingPrice = htfPrice,
+                    ClosePrice = swingBars.ClosePrices[bestIdx],
+                    DisplayPrice = htfPrice,                            // fallback: HTF price
+                    SwingBarsIndex = -1                                 // marks "no chart bar"
+                };
+                return new SwingPoint { Swing = fallbackSwing, Type = missingType };
+            }
 
             // Trouver la bougie exacte sur le chart
+            int chartIndex = chartStartIndex;
             int chartEndIndex = Math.Min(chartStartIndex + candleRangeInHTF, Bars.Count - 1);
             for (int x = chartStartIndex; x < chartEndIndex; x++)
             {
@@ -534,7 +561,7 @@ namespace cAlgo.Indicators
             {
                 SwingHTFOpenTime = swingBars.OpenTimes[bestIdx],
                 SwingChartOpenTime = Bars.OpenTimes[chartIndex],
-                SwingPrice = (missingType == SwingType.High) ? swingBars.HighPrices[bestIdx] : swingBars.LowPrices[bestIdx],
+                SwingPrice = htfPrice,
                 ClosePrice = swingBars.ClosePrices[bestIdx],
                 DisplayPrice = (missingType == SwingType.High) ? Bars.HighPrices[chartIndex] : Bars.LowPrices[chartIndex],
                 SwingBarsIndex = chartStartIndex
@@ -561,57 +588,47 @@ namespace cAlgo.Indicators
 
             if (DrawSwingIcons)
             {
-                // Draw arrow up for bullish swings
+                // Draw arrow down for swing highs
                 for (int bullCount = 0; bullCount < swingHighCount; bullCount++)
                 {
                     Swing swingBull = swingHighPrices[bullCount];
+                    if (swingBull.SwingBarsIndex < 0)
+                        continue; // no chart bar loaded, skip drawing
 
-                    // Calculate candle time on the Chart
-                    DateTime positionIcon = swingBull.SwingChartOpenTime;
-
-                    // Draw icon using DisplayPrice for accurate visual placement
                     Chart.DrawIcon("SwingIcon_" + swingBull.SwingBarsIndex, ChartIconType.DownArrow, swingBull.SwingChartOpenTime, swingBull.DisplayPrice + iconGap, Color.Red);
                 }
-                
-                
-                // Draw arrow down for bearish swings
+
+                // Draw arrow up for swing lows
                 for (int bearCount = 0; bearCount < swingLowCount; bearCount++)
                 {
                     Swing swingBear = swingLowPrices[bearCount];
+                    if (swingBear.SwingBarsIndex < 0)
+                        continue; // no chart bar loaded, skip drawing
 
-                    // Calculate candle time on the Chart
-                    DateTime positionIcon = swingBear.SwingChartOpenTime;
-
-                    // Draw icon using DisplayPrice for accurate visual placement
                     Chart.DrawIcon("SwingIcon_" + swingBear.SwingBarsIndex, ChartIconType.UpArrow, swingBear.SwingChartOpenTime, swingBear.DisplayPrice - iconGap, Color.Green);
                 }
             }
-            
+
             if (DrawSwingDots)
             {
-                // Draw arrow up for bullish swings
+                // Draw dot for swing highs
                 for (int bullCount = 0; bullCount < swingHighCount; bullCount++)
                 {
                     Swing swingBull = swingHighPrices[bullCount];
-                    
-                    // Calculate candle time on the Chart
-                    DateTime positionIcon = swingBull.SwingChartOpenTime;
-                    
-                    // Plot dot at the swing using DisplayPrice for accurate visual placement
+                    if (swingBull.SwingBarsIndex < 0)
+                        continue; // no chart bar loaded, skip drawing
+
                     Chart.DrawTrendLine("SwingDot_" + swingBull.SwingBarsIndex, swingBull.SwingChartOpenTime, swingBull.DisplayPrice,
                         swingBull.SwingChartOpenTime, swingBull.DisplayPrice + Symbol.PipSize, Color.Yellow, 3, LineStyle.Solid);
                 }
-                
-                
-                // Draw arrow down for bearish swings
+
+                // Draw dot for swing lows
                 for (int bearCount = 0; bearCount < swingLowCount; bearCount++)
                 {
                     Swing swingBear = swingLowPrices[bearCount];
-                    
-                    // Calculate candle time on the Chart
-                    DateTime positionIcon = swingBear.SwingChartOpenTime;
-                    
-                    // Plot dot at the swing using DisplayPrice for accurate visual placement
+                    if (swingBear.SwingBarsIndex < 0)
+                        continue; // no chart bar loaded, skip drawing
+
                     Chart.DrawTrendLine("SwingDot_" + swingBear.SwingBarsIndex, swingBear.SwingChartOpenTime,
                         swingBear.SwingPrice, swingBear.SwingChartOpenTime, swingBear.DisplayPrice - Symbol.PipSize, Color.Yellow, 3, LineStyle.Solid);
                 }
