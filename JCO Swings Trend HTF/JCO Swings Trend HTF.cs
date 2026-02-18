@@ -21,11 +21,12 @@
 //
 // Changelog:
 // v1.9 (2026-02-18)
-//   - Force loading of additional HTF bars in Initialize() via LoadMoreHistory()
-//     to fix incorrect data when chart TF is much lower than swing TF
-//     (e.g. M1 chart + D1 swings: cTrader default loads only ~3 D1 bars)
-//   - Loop calls LoadMoreHistory() until SwingLookbackPeriod + 50 bars are loaded
-//     or max 10 attempts are reached
+//   - Force loading of additional chart bars via Bars.LoadMoreHistory() (up to 50 attempts)
+//     Root cause: on low chart TFs (M5, M1), GetIndexByTime() returns -1 for HTF bars
+//     older than the chart's loaded range, causing those HTF bars to be silently skipped
+//     (e.g. M5 chart with D1 swings needs 200*288=57,600 M5 bars to cover 200 D1 bars)
+//   - HTF bar loading kept (10 attempts) as a guard for the opposite direction
+//   - candleRangeInHTF now calculated first in Initialize() to be used for chart bar estimate
 //
 // v1.8 (2026-02-18)
 //   - Close-based trend calculation: CalculateSwingsTrend now uses pivot close prices
@@ -181,20 +182,29 @@ namespace cAlgo.Indicators
             // Initialize the Bars array of the given timeframe for Swings
             swingBarsHTF = MarketData.GetBars(SwingTimeFrame);
 
+            candleRangeInHTF = GetTimeFrameInSeconds(SwingTimeFrame) / GetTimeFrameInSeconds(Bars.TimeFrame);
+
             // Force loading of additional historical HTF bars.
             // Required when the chart TF is much lower than the swing TF (e.g. M1 chart + D1 swings):
-            // cTrader only loads HTF bars proportional to the chart's time range by default,
-            // which may not be enough to cover SwingLookbackPeriod HTF bars.
-            // LoadMoreHistory() is called multiple times to ensure enough data is loaded.
-            int htfBarsNeeded = SwingLookbackPeriod + 50; // buffer on top of lookback
-            int maxAttempts = 10;
-            for (int attempt = 0; attempt < maxAttempts && swingBarsHTF.Count < htfBarsNeeded; attempt++)
-            {
+            // cTrader only loads HTF bars proportional to the chart's time range by default.
+            int htfBarsNeeded = SwingLookbackPeriod + 50;
+            for (int attempt = 0; attempt < 10 && swingBarsHTF.Count < htfBarsNeeded; attempt++)
                 swingBarsHTF.LoadMoreHistory();
-            }
+
+            // Force loading of additional chart bars.
+            // In DetectSwings, each HTF bar is matched to a chart bar via GetIndexByTime().
+            // If the chart bar is not loaded (too far in history), the HTF bar is skipped,
+            // resulting in too few swings on low chart TFs (M5, M1, etc.).
+            // We need (SwingLookbackPeriod + buffer) * candleRangeInHTF chart bars minimum.
+            int chartBarsNeeded = (SwingLookbackPeriod + 50) * candleRangeInHTF;
+            for (int attempt = 0; attempt < 50 && Bars.Count < chartBarsNeeded; attempt++)
+                Bars.LoadMoreHistory();
 
             if (EnablePrintSwings)
+            {
                 Print($"HTF bars loaded: {swingBarsHTF.Count} (needed: {htfBarsNeeded})");
+                Print($"Chart bars loaded: {Bars.Count} (needed: {chartBarsNeeded})");
+            }
 
             // Initialize the Swing arrays
             swingHighPrices = new Swing[SwingLookbackPeriod];
@@ -205,11 +215,10 @@ namespace cAlgo.Indicators
             _liquiditySweep = false;
             
             if (EnablePrintSwings)
+            {
                 Print($"Indicator initialized with Swing Time Frame: {SwingTimeFrame}");
-            
-            candleRangeInHTF = GetTimeFrameInSeconds(SwingTimeFrame) / GetTimeFrameInSeconds(Bars.TimeFrame);
-            if (EnablePrintSwings)
                 Print($"Count of LTF candle in the HTF: {candleRangeInHTF}");
+            }
         }
 
         public override void Calculate(int index)
